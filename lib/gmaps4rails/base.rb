@@ -1,4 +1,5 @@
 require 'net/http'
+require 'net/https'
 require 'uri'
 require 'crack'
 
@@ -8,6 +9,9 @@ module Gmaps4rails
   class GeocodeStatus < StandardError; end
   class GeocodeNetStatus < StandardError; end
   class GeocodeInvalidQuery < StandardError; end
+  class PlaceStatus < StandardError; end
+  class PlaceNetStatus < StandardError; end
+  class PlaceInvalidQuery < StandardError; end
   class DirectionStatus < StandardError; end
   class DirectionNetStatus < StandardError; end
   class DirectionInvalidQuery < StandardError; end
@@ -83,6 +87,41 @@ module Gmaps4rails
      Gmaps4rails.handle_geocoding_response(request, Net::HTTP.get_response(URI.parse(url)), raw)
    end # end address valid
   end
+
+ # This method place api an address using the GoogleMaps webservice
+  # options are:
+  # * address: string, mandatory
+  # * lang: to set the language one wants the result to be translated (default is english)
+  # * raw: to get the raw response from google, default is false
+
+  def Gmaps4rails.place(location, radius, key, types = "", lang="en", raw = false)
+   if location.nil? || location.empty?
+     raise Gmaps4rails::PlaceInvalidQuery, "You must provide an address"
+   elsif radius.nil? || radius.empty?
+     raise Gmaps4rails::PlaceInvalidQuery, "radis is invalid"
+   elsif key.nil? || key.empty?
+     raise Gmaps4rails::PlaceInvalidQuery, "Place API Key is invalid"
+   else #coordinates are valid
+     geocoder = "https://maps.googleapis.com/maps/api/place/search/json?language=#{lang}&location="
+     output = "&sensor=false"
+     output << "&types=#{types}" if types != ""
+     output << "&radius=" + radius
+     output <<  "&key=" + key
+     #send request to the google api to get the lat/lng
+     request = geocoder + location + output
+     url = URI.escape(request)
+
+     #get response using HTTPS
+     https = Net::HTTP.new('maps.googleapis.com','443')
+     https.use_ssl = true
+     https.verify_mode = OpenSSL::SSL::VERIFY_NONE
+     response = nil
+     https.start do |w|
+       response = w.get(url)
+     end
+     Gmaps4rails.handle_place_response(request, response, raw)
+   end # end address valid
+  end
   
   # This method retrieves destination results provided by GoogleMaps webservice
   # options are:
@@ -141,6 +180,39 @@ module Gmaps4rails
     else #if not http success
       raise Gmaps4rails::GeocodeNetStatus, "The request sent to google was invalid (not http success): #{request}.
       Response was: #{response}"           
+    end #end resp test
+  end
+
+  def Gmaps4rails.handle_place_response(request, response, raw)
+    #parse result if result received properly
+    if response.is_a?(Net::HTTPSuccess)
+      #parse the json
+      parse = Crack::JSON.parse(response.body)
+      #check if google went well
+      if parse["status"] == "OK"
+        return parse if raw == true
+        array = []
+        parse["results"].each do |result|
+          array << {
+                     :name => result["name"],
+                     :vicinity => result["vicinity"],
+                     :icon => result["icon"],
+                     :lat => result["geometry"]["location"]["lat"],
+                     :lng => result["geometry"]["location"]["lng"],
+                     :types => result["types"],
+                     :reference => result["reference"],
+                     :full_data => result
+                    }
+        end
+        return array
+      else #status != OK
+        raise Gmaps4rails::PlaceStatus, "The query you passed seems invalid, status was: #{parse["status"]}.
+        Request was: #{request}"
+      end #end parse status
+
+    else #if not http success
+      raise Gmaps4rails::PlaceNetStatus, "The request sent to google was invalid (not http success): #{request}.
+      Response was: #{response}"
     end #end resp test
   end
   
